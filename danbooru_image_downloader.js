@@ -219,9 +219,21 @@
 
     async function fetchPostFileUrl(postId) {
         try {
-            const response = await fetch(`https://kagamihara.donmai.us/posts/${postId}.json`);
-            const data = await response.json();
-            return data.file_url;
+            // Fetch from HTML page to get the full descriptive download URL
+            const pageResponse = await fetch(`https://kagamihara.donmai.us/posts/${postId}`);
+            const html = await pageResponse.text();
+
+            // Extract download URL from the page (it has the descriptive filename)
+            const downloadMatch = html.match(/href="([^"]*cdn\.donmai\.us\/original[^"]*)"/);
+            if (downloadMatch && downloadMatch[1]) {
+                // Decode HTML entities and return the full descriptive URL
+                return downloadMatch[1].replace(/&amp;/g, '&').split('?')[0];
+            }
+
+            // Fallback to JSON API if HTML parsing fails
+            const jsonResponse = await fetch(`https://kagamihara.donmai.us/posts/${postId}.json`);
+            const data = await jsonResponse.json();
+            return data.large_file_url || data.file_url;
         } catch (err) {
             console.error('Failed to fetch post data:', err);
             return null;
@@ -293,7 +305,7 @@
 
     // Extract filename from URL
     function getFilename(url) {
-        return url.split('/').pop().split('?')[0];
+        return url.split('/').pop().split('?')[0]; // Remove path and query params, keep extension
     }
 
     // ========== DOWNLOAD QUEUE ==========
