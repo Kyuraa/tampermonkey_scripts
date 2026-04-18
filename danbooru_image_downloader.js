@@ -7,7 +7,7 @@
 // @match        https://*.donmai.us/*
 // @grant        GM_download
 // @grant        GM_xmlhttpRequest
-// @connect      danbooru.donmai.us
+// @grant        unsafeWindow
 // @connect      cdn.donmai.us
 // @run-at       document-idle
 // ==/UserScript==
@@ -217,23 +217,36 @@
 
     // ========== DANBOORU API ==========
 
-    async function fetchPostFileUrl(postId) {
+    function buildFilename(post) {
+        const md5 = post.md5;
+        const ext = post.file_ext;
+        const chars = (post.tag_string_character || '').split(' ').filter(Boolean).slice(0, 3).join(' ');
+        const copyrights = (post.tag_string_copyright || '').split(' ').filter(Boolean).slice(0, 3).join(' ');
+        const artists = (post.tag_string_artist || '').split(' ').filter(Boolean).join(' ');
+
+        const parts = [];
+        if (chars) parts.push(chars);
+        if (copyrights) parts.push(copyrights);
+        if (artists) parts.push(`drawn by ${artists}`);
+
+        if (parts.length === 0) return `${md5}.${ext}`;
+        return `__${parts.join(' ').replace(/ /g, '_')}__${md5}.${ext}`;
+    }
+
+    async function fetchPostData(postId) {
         try {
-            // Fetch from HTML page to get the full descriptive download URL
-            const pageResponse = await fetch(`https://kagamihara.donmai.us/posts/${postId}`);
-            const html = await pageResponse.text();
-
-            // Extract download URL from the page (it has the descriptive filename)
-            const downloadMatch = html.match(/href="([^"]*cdn\.donmai\.us\/original[^"]*)"/);
-            if (downloadMatch && downloadMatch[1]) {
-                // Decode HTML entities and return the full descriptive URL
-                return downloadMatch[1].replace(/&amp;/g, '&').split('?')[0];
+            // Use unsafeWindow.fetch to run in page context (bypasses Tampermonkey @connect sandbox).
+            // Use the search API (/posts.json?tags=id:X) instead of /posts/X.json —
+            // the search endpoint is served from the frontend and doesn't redirect to backend servers.
+            const resp = await unsafeWindow.fetch(`/posts.json?tags=id%3A${postId}&limit=1`);
+            const posts = await resp.json();
+            if (posts.length > 0) {
+                const post = posts[0];
+                const url = post.file_url || post.large_file_url || null;
+                if (!url) return null;
+                return { url, filename: buildFilename(post) };
             }
-
-            // Fallback to JSON API if HTML parsing fails
-            const jsonResponse = await fetch(`https://kagamihara.donmai.us/posts/${postId}.json`);
-            const data = await jsonResponse.json();
-            return data.large_file_url || data.file_url;
+            return null;
         } catch (err) {
             console.error('Failed to fetch post data:', err);
             return null;
@@ -321,9 +334,9 @@
     }
 
     // Add to queue
-    function queueDownload(url, type) {
+    function queueDownload(url, type, filename) {
         const id = Date.now() + Math.random().toString(36).substr(2, 9);
-        const filename = getFilename(url);
+        if (!filename) filename = getFilename(url);
 
         totalQueued++;
         updateCounts();
@@ -454,8 +467,8 @@
                 this.style.background = '#555';
 
                 // Fetch file URL from API
-                const fileUrl = await fetchPostFileUrl(postId);
-                if (!fileUrl) {
+                const postData = await fetchPostData(postId);
+                if (!postData) {
                     this.textContent = '❌ Error';
                     this.style.background = '#f66';
                     setTimeout(() => {
@@ -466,8 +479,8 @@
                 }
 
                 // Queue the download
-                const type = getMediaType(fileUrl);
-                queueDownload(fileUrl, type);
+                const type = getMediaType(postData.url);
+                queueDownload(postData.url, type, postData.filename);
 
                 // Show success feedback
                 this.textContent = '✓ Queued';
