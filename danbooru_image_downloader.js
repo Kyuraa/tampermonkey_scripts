@@ -22,6 +22,7 @@
 
     // Queue state
     const queue = [];
+    const activeTaskMap = {}; // id → task, for tasks currently downloading
     let activeDownloads = 0;
     let totalQueued = 0;
     let totalCompleted = 0;
@@ -334,7 +335,7 @@
     }
 
     // Add to queue
-    function queueDownload(url, type, filename) {
+    function queueDownload(url, type, filename, postId) {
         const id = Date.now() + Math.random().toString(36).substr(2, 9);
         if (!filename) filename = getFilename(url);
 
@@ -343,7 +344,7 @@
         showStatus();
         addToStatusList(id, filename, type);
 
-        queue.push({ id, url, filename, type });
+        queue.push({ id, url, filename, type, postId });
         saveState();
         processQueue();
 
@@ -353,6 +354,7 @@
     // Download function
     function downloadImage(task) {
         const { id, url, filename } = task;
+        activeTaskMap[id] = task;
 
         updateStatus(id, 'downloading');
 
@@ -399,17 +401,34 @@
         });
     }
 
+    function markButtonDownloaded(postId) {
+        const article = document.querySelector(`article[data-id="${postId}"]`);
+        if (!article) return;
+        const btn = article.querySelector('.db-download-btn');
+        if (!btn) return;
+        btn.textContent = 'Downloaded';
+        btn.style.background = '#2a5a2a';
+        btn.style.color = '#aaffaa';
+        btn.style.cursor = 'default';
+        btn.replaceWith(btn.cloneNode(true)); // remove all event listeners
+    }
+
     function onDownloadComplete(id, success) {
         activeDownloads--;
         totalCompleted++;
         updateCounts();
         updateStatus(id, success ? 'done' : 'error');
 
-        // Remove completed item from queue (for persistence)
-        const index = queue.findIndex(task => task.id === id);
-        if (index !== -1) {
-            queue.splice(index, 1);
+        // Mark button if successfully downloaded
+        const task = activeTaskMap[id];
+        if (task) {
+            if (success && task.postId) markButtonDownloaded(task.postId);
+            delete activeTaskMap[id];
         }
+
+        // Remove completed item from queue (for persistence)
+        const index = queue.findIndex(t => t.id === id);
+        if (index !== -1) queue.splice(index, 1);
 
         saveState();
         processQueue();
@@ -480,7 +499,7 @@
 
                 // Queue the download
                 const type = getMediaType(postData.url);
-                queueDownload(postData.url, type, postData.filename);
+                queueDownload(postData.url, type, postData.filename, postId);
 
                 // Show success feedback
                 this.textContent = '✓ Queued';
